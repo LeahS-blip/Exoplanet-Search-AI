@@ -1,0 +1,182 @@
+import gradio as gr
+import numpy as np
+import tensorflow as tf
+from PIL import Image
+import os
+
+# ── Model Loading ───
+# Loads the pre-trained CNN model once at startup to avoid reloading on each request.
+
+MODEL_PATH = "cnn_exoplanets.keras"
+
+try:
+    model = tf.keras.models.load_model(MODEL_PATH)
+    MODEL_LOADED = True
+except Exception as e:
+    print(f"Warning: Could not load model: {e}")
+    model = None
+    MODEL_LOADED = False
+
+# ── Constants ───
+# Defines class labels and the input image size expected by the model.
+
+CLASS_LABELS = ["No Exoplanet Detected", "Exoplanet Detected"]
+IMG_SIZE = (128, 128)
+
+# ── Prediction Function ───
+# Preprocesses the uploaded image and runs inference, returning a label and confidence scores.
+
+def predict_exoplanet(image):
+    if image is None:
+        return "Please upload an image.", {label: 0.0 for label in CLASS_LABELS}
+
+    if not MODEL_LOADED or model is None:
+        return "Model failed to load. Check that cnn_exoplanets.keras is present.", {label: 0.0 for label in CLASS_LABELS}
+
+    try:
+        img = Image.fromarray(image).convert("RGB")
+        img = img.resize(IMG_SIZE)
+        img_array = np.array(img, dtype=np.float32) / 255.0  # Normalize to [0, 1]
+        img_array = np.expand_dims(img_array, axis=0)  # Add batch dimension
+
+        preds = model.predict(img_array, verbose=0)
+
+        # Handle both binary sigmoid output and softmax multi-class output
+        if preds.shape[-1] == 1:
+            confidence = float(preds[0][0])
+            confidences = {CLASS_LABELS[0]: 1.0 - confidence, CLASS_LABELS[1]: confidence}
+            predicted_label = CLASS_LABELS[1] if confidence >= 0.5 else CLASS_LABELS[0]
+        else:
+            confidences = {CLASS_LABELS[i]: float(preds[0][i]) for i in range(len(CLASS_LABELS))}
+            predicted_label = CLASS_LABELS[int(np.argmax(preds[0]))]
+
+        return predicted_label, confidences
+
+    except Exception as e:
+        return f"Prediction error: {str(e)}", {label: 0.0 for label in CLASS_LABELS}
+
+# ── Sample Images ───
+# Collects any sample light curve images bundled in a 'samples/' subfolder for the user to try.
+
+SAMPLES_DIR = "samples"
+sample_images = []
+if os.path.isdir(SAMPLES_DIR):
+    for fname in sorted(os.listdir(SAMPLES_DIR)):
+        if fname.lower().endswith((".png", ".jpg", ".jpeg")):
+            sample_images.append(os.path.join(SAMPLES_DIR, fname))
+
+# ── CSS Styling ───
+# Injects custom CSS to give the app a futuristic, space-inspired visual theme.
+
+CUSTOM_CSS = """
+body, .gradio-container {
+    background-color: #020b18 !important;
+    color: #c9e8ff !important;
+    font-family: 'Courier New', monospace !important;
+}
+h1, h2, h3, .gr-markdown h1, .gr-markdown h2 {
+    color: #00d4ff !important;
+    text-shadow: 0 0 10px #00d4ff88;
+    letter-spacing: 2px;
+}
+.gr-button {
+    background: linear-gradient(135deg, #003d66, #006699) !important;
+    border: 1px solid #00d4ff !important;
+    color: #00d4ff !important;
+    font-family: 'Courier New', monospace !important;
+    letter-spacing: 1px;
+}
+.gr-button:hover {
+    background: linear-gradient(135deg, #005599, #0099cc) !important;
+    box-shadow: 0 0 12px #00d4ff88 !important;
+}
+.gr-box, .gr-panel, .gr-form {
+    background-color: #030f1e !important;
+    border: 1px solid #00334d !important;
+    border-radius: 8px !important;
+}
+.gr-input, .gr-image {
+    border: 1px solid #00334d !important;
+    background-color: #010a14 !important;
+}
+label, .gr-label {
+    color: #7ecfef !important;
+    letter-spacing: 1px;
+}
+"""
+
+# ── UI Layout ───
+# Builds the Gradio Blocks interface with upload, prediction output, and sample gallery sections.
+
+with gr.Blocks(css=CUSTOM_CSS) as demo:
+
+    gr.Markdown(
+        """
+        # ✦ EXOSEARCH
+        ### Exoplanet Detection via Light Curve Analysis
+        Upload a graph of a stellar light curve. The model will analyze the transit dip pattern
+        and determine whether an exoplanet is likely present.
+        """
+    )
+
+    with gr.Row():
+        with gr.Column(scale=1):
+            gr.Markdown("#### Upload Light Curve Image")
+            image_input = gr.Image(
+                label="Light Curve Graph",
+                type="numpy",
+                height=280,
+            )
+            submit_btn = gr.Button("⟐ ANALYZE", variant="primary")
+            clear_btn = gr.Button("✕ Clear")
+
+        with gr.Column(scale=1):
+            gr.Markdown("#### Detection Result")
+            result_label = gr.Label(
+                label="Prediction",
+                num_top_classes=2,
+            )
+            prediction_text = gr.Textbox(
+                label="Classification",
+                interactive=False,
+                placeholder="Awaiting analysis...",
+            )
+
+    # ── Event Handlers ───
+    # Connects the button clicks to the prediction function and clear action.
+
+    submit_btn.click(
+        fn=predict_exoplanet,
+        inputs=[image_input],
+        outputs=[prediction_text, result_label],
+    )
+
+    clear_btn.click(
+        fn=lambda: (None, "Awaiting analysis...", {}),
+        inputs=[],
+        outputs=[image_input, prediction_text, result_label],
+    )
+
+    # ── Sample Gallery ───
+    # Shows example light curve images the user can click to auto-load and test the model.
+
+    if sample_images:
+        gr.Markdown("#### Sample Light Curves to Try")
+        gr.Examples(
+            examples=sample_images,
+            inputs=image_input,
+            label="Click a sample to load it",
+        )
+    else:
+        gr.Markdown(
+            "> *Place sample images in a `samples/` folder next to `app.py` to display them here.*"
+        )
+
+    gr.Markdown(
+        """
+        ---
+        *Model: CNN trained on Kepler stellar photometry data · ExoSearch v1.0*
+        """
+    )
+
+demo.launch()
