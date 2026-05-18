@@ -1,0 +1,8 @@
+gradio==6.14.0
+numpy
+pandas
+matplotlib
+scipy
+scikit-learn
+tensorflow; python_version >= "3.10" and python_version < "3.13"
+tensorflow-cpu; python_version >= "3.13"
